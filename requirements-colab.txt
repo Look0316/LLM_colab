@@ -1,0 +1,16 @@
+# Cybersecurity-4B-AI-Model - Colab Requirements
+# ===========================================
+# 安裝: pip install -r requirements-colab.txt
+
+transformers>=4.40.0
+torch>=2.1.0
+accelerate>=0.28.0
+peft>=0.10.0
+bitsandbytes>=0.41.0
+trl>=0.8.0
+scikit-learn
+tqdm
+datasets
+faiss-cpu
+sentence-transformers
+google-colab
