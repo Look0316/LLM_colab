@@ -81,8 +81,8 @@ def check_gpu():
             CONFIG["per_device_train_batch_size"] = 4
         elif gpu_mem >= 10:
             CONFIG["per_device_train_batch_size"] = 2
-        elseper_device_train_batch:
-            CONFIG["_size"] = 1
+        else:
+            CONFIG["per_device_train_batch_size"] = 1
         
         return True
     else:
