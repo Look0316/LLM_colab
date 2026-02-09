@@ -3,14 +3,12 @@
 """
 CyberSec 4B Model - Colab Complete Version
 ==========================================
-對應原版 Cybersecurity-4B-AI-Model 完整架構
+Full replica of original training pipeline for Colab
 
-使用方法 (Google Colab):
-```python
+Usage (Google Colab):
 !git clone https://github.com/Look0316/LLM_colab.git
 %cd LLM_colab
 !python colab_complete.py
-```
 """
 
 import os
@@ -21,7 +19,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict
 
-# UTF-8 編碼
+# UTF-8 encoding
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
@@ -29,54 +27,52 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 def safe_print(msg):
-    try: print(msg)
-    except: pass
+    try:
+        print(msg)
+    except:
+        pass
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 配置
+# Configuration
 # ═══════════════════════════════════════════════════════════════════════════
 
 CONFIG = {
-    # 模型配置
-    "deepseek_model": "deepseek-ai/deepseek-coder-7b-instruct-v1.5",
+    # Model config
     "qwen_model": "Qwen/Qwen2.5-7B-Instruct",
     "base_model": "Qwen/Qwen2.5-7B-Instruct",
     
-    # 數據配置
+    # Data config
     "max_samples": 2000,
     "data_path": "/content/data/distilled_tinyllm.jsonl",
     "output_dir": "/content/outputs/finetuned_tinyllm_v1",
     
-    # 訓練配置
+    # Training config
     "num_train_epochs": 3,
     "per_device_train_batch_size": 2,
     "gradient_accumulation_steps": 4,
     "learning_rate": 2e-4,
     "max_seq_length": 1024,
     
-    # QLoRA 配置
+    # QLoRA config
     "lora_r": 16,
     "lora_alpha": 32,
     "lora_dropout": 0.05,
     "lora_target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
-    
-    # Colab 優化
-    "use_drive": False,
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 工具函數
+# Utility Functions
 # ═══════════════════════════════════════════════════════════════════════════
 
 def check_gpu():
-    """檢查 GPU"""
+    """Check GPU status"""
     import torch
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        safe_print(f"\n✅ GPU: {gpu_name} ({gpu_mem:.1f} GB)")
+        safe_print(f"\n[OK] GPU: {gpu_name} ({gpu_mem:.1f} GB)")
         
-        # 自動調整 batch size
+        # Auto adjust batch size
         if gpu_mem >= 14:
             CONFIG["per_device_train_batch_size"] = 4
         elif gpu_mem >= 10:
@@ -84,31 +80,32 @@ def check_gpu():
         else:
             CONFIG["per_device_train_batch_size"] = 1
         
+        safe_print(f"[OK] Batch size: {CONFIG['per_device_train_batch_size']}")
         return True
     else:
-        safe_print("\n⚠️ 未檢測到 GPU!")
+        safe_print("\n[WARNING] No GPU detected!")
         return False
 
 def clean_gpu_memory():
-    """清理 GPU 記憶體"""
+    """Clean GPU memory"""
     import torch
     import gc
     gc.collect()
     torch.cuda.empty_cache()
 
 def print_step(step_num, title):
-    """打印步驟"""
+    """Print step header"""
     safe_print(f"\n{'='*60}")
     safe_print(f"  STEP {step_num}: {title}")
     safe_print(f"{'='*60}")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 安裝依賴
+# Install Dependencies
 # ═══════════════════════════════════════════════════════════════════════════
 
 def install_dependencies():
-    """安裝必要的依賴"""
-    print_step(0, "安裝依賴")
+    """Install required dependencies"""
+    print_step(0, "Installing Dependencies")
     
     import subprocess
     import sys
@@ -126,17 +123,21 @@ def install_dependencies():
     ]
     
     for pkg in packages:
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "-q", pkg
-        ])
+        try:
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "-q", pkg
+            ])
+            safe_print(f"[OK] {pkg}")
+        except Exception as e:
+            safe_print(f"[WARNING] {pkg}: {e}")
     
-    safe_print("✅ 依賴安裝完成")
+    safe_print("[OK] Dependencies installed")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PART 1: Multi-Teacher Distillation (數據生成)
+# PART 1: Data Generation
 # ═══════════════════════════════════════════════════════════════════════════
 
-# 場景模板 (完全對應原版)
+# Scenario templates (exact same as original)
 SCENARIO_TEMPLATES = [
     "You're performing reconnaissance. You notice open ports {ports} on {target}.",
     "During a penetration test, you discover a {service} service running on port {port}.",
@@ -154,7 +155,7 @@ SCENARIO_TEMPLATES = [
     "Kernel version {version} on {os}. Known exploit is {exploit}.",
 ]
 
-# 正確答案模板 (完全對應原版)
+# Answer templates (exact same as original)
 ANSWER_TEMPLATES = {
     "ports": [
         "Run nmap -sV -sC {target} to enumerate services.",
@@ -208,7 +209,7 @@ ANSWER_TEMPLATES = {
     ],
 }
 
-# In-context Examples 庫 (完全對應原版)
+# In-context examples (exact same as original)
 INCONTEXT_EXAMPLES = [
     {
         "scenario": "XSS found on login page. The payload <script>alert(1)</script> was reflected.",
@@ -228,7 +229,6 @@ INCONTEXT_EXAMPLES = [
 
 ## Next: Use cookie to authenticate as victim user
 ```bash
-# Use the stolen cookie
 curl -b "session=stolen_cookie" http://target.com/admin
 ```"""
     },
@@ -250,7 +250,6 @@ sqlmap -u 'http://target.com/login?user_id=1' --dbs
 
 ## Next: Crack hashes and use for lateral movement
 ```bash
-# Dump the users table
 sqlmap -u 'http://target.com/login?user_id=1' -D users --tables -T admin --dump
 ```"""
     },
@@ -273,7 +272,6 @@ ssh -i id_rsa www-data@10.10.10.15
 
 ## Next: Privilege escalation to root
 ```bash
-# Check for privilege escalation vectors
 sudo -l
 find / -perm -4000 2>/dev/null
 ```"""
@@ -296,7 +294,6 @@ nmap -p 445 --script smb-vuln-ms17-010 10.10.10.5
 
 ## Next: Exploit for reverse shell
 ```bash
-# Use Metasploit or manual exploit
 msfconsole -q
 use exploit/windows/smb/ms17_010_eternalblue
 set RHOSTS 10.10.10.5
@@ -322,19 +319,15 @@ python3 -c 'import os; os.setuid(0); os.system("/bin/bash")'
 
 ## Next: Dump credentials and persist
 ```bash
-# Dump password hashes
 cat /etc/shadow
-# Add persistence
 echo "root:password123" | chpasswd
 ```"""
     },
 ]
 
 def generate_distilled_data(output_file: str, num_samples: int = 2000) -> str:
-    """
-    數據生成函數 - 對應原版 multi_teacher_distillation.py
-    """
-    print_step(1, "生成 TinyLLM 格式數據")
+    """Generate TinyLLM format data - exact same as original"""
+    print_step(1, "Generating TinyLLM Data")
     
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -342,14 +335,14 @@ def generate_distilled_data(output_file: str, num_samples: int = 2000) -> str:
     from tqdm import tqdm
     import json
     
-    safe_print(f"   模型: {CONFIG['qwen_model']}")
-    safe_print(f"   樣本數: {num_samples}")
+    safe_print(f"   Model: {CONFIG['qwen_model']}")
+    safe_print(f"   Samples: {num_samples}")
     
-    # 創建輸出目錄
+    # Create output directory
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    # 載入模型
-    safe_print("\n🔄 載入模型...")
+    # Load model
+    safe_print("\n[LOADING] Loading model...")
     tokenizer = AutoTokenizer.from_pretrained(
         CONFIG['qwen_model'], 
         trust_remote_code=True
@@ -360,29 +353,29 @@ def generate_distilled_data(output_file: str, num_samples: int = 2000) -> str:
         device_map="auto",
         trust_remote_code=True,
     )
-    safe_print("✅ 模型載入完成")
+    safe_print("[OK] Model loaded")
     
-    # 生成數據
+    # Generate data
     data = []
     
-    safe_print("\n🔄 生成數據中...")
-    for i in tqdm(range(num_samples), desc="生成"):
-        # 隨機選擇場景和答案
+    safe_print("\n[LOADING] Generating data...")
+    for i in tqdm(range(num_samples), desc="Generating"):
+        # Random scenario and answer
         scenario = random.choice(SCENARIO_TEMPLATES)
         category = random.choice(list(ANSWER_TEMPLATES.keys()))
         answers = ANSWER_TEMPLATES[category]
         answer = random.choice(answers)
         
-        # 5 個 in-context examples
+        # 5 in-context examples
         examples = random.sample(INCONTEXT_EXAMPLES, min(5, len(INCONTEXT_EXAMPLES)))
         
-        # 構造對話 (完全對應原版格式)
+        # Build conversation (exact same format as original)
         messages = [
             {"role": "system", "content": "You are a professional penetration tester with expertise in Red Team operations."},
             {"role": "user", "content": f"## Scenario: {scenario}\n\n## Instruction: Think step-by-step about the attack chain, including:\n1. State: Current situation\n2. Hypothesis: What is possible\n3. Experiment: What command would you run?\n4. Observation: What would you see?\n5. Success: Yes/No\n6. Next: What would you try next?\n\nProvide the complete attack chain with executable commands."},
         ]
         
-        # 生成回應
+        # Generate response
         text = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -402,7 +395,7 @@ def generate_distilled_data(output_file: str, num_samples: int = 2000) -> str:
         
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # TinyLLM 格式 (完全對應原版)
+        # TinyLLM format (exact same as original)
         sample = {
             "messages": messages + [{"role": "assistant", "content": response}],
             "category": category,
@@ -413,41 +406,41 @@ def generate_distilled_data(output_file: str, num_samples: int = 2000) -> str:
         
         data.append(sample)
         
-        # 每 100 樣本清理記憶體
+        # Clean memory every 100 samples
         if (i + 1) % 100 == 0:
             clean_gpu_memory()
     
-    # 保存
+    # Save
     with open(output_file, 'w', encoding='utf-8') as f:
         for item in data:
             f.write(json.dumps(item, ensure_ascii=False) + '\n')
     
-    safe_print(f"\n✅ 數據已保存: {output_file}")
-    safe_print(f"   總樣本數: {len(data)}")
+    safe_print(f"\n[OK] Data saved: {output_file}")
+    safe_print(f"   Total samples: {len(data)}")
     
-    # 卸載模型
+    # Unload model
     del model
     clean_gpu_memory()
     
     return output_file
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PART 2: Train TinyLLM (訓練)
+# PART 2: Training
 # ═══════════════════════════════════════════════════════════════════════════
 
 def load_training_data(data_path: str) -> List[dict]:
-    """載入訓練數據 - 對應原版"""
-    safe_print(f"\n📖 載入 TinyLLM 格式數據: {data_path}")
+    """Load training data - exact same as original"""
+    safe_print(f"\n[READING] Loading data: {data_path}")
     samples = []
     with open(data_path, 'r', encoding='utf-8') as f:
         for line in f:
             samples.append(json.loads(line))
-    safe_print(f"   樣本數: {len(samples)}")
+    safe_print(f"   Samples: {len(samples)}")
     return samples
 
 
 def format_sample(sample: dict) -> str:
-    """格式化樣本為訓練格式 - 對應原版"""
+    """Format sample for training - exact same as original"""
     messages = sample.get("messages", [])
     
     conversation = ""
@@ -461,7 +454,7 @@ def format_sample(sample: dict) -> str:
 
 
 class TinyLLMDataset:
-    """數據集類 - 對應原版"""
+    """Dataset class - exact same as original"""
     def __init__(self, data, tokenizer, max_length):
         self.data = data
         self.tokenizer = tokenizer
@@ -490,15 +483,9 @@ class TinyLLMDataset:
         }
 
 
-def train_tinyllm(
-    data_path: str,
-    output_dir: str,
-    num_epochs: int = 3,
-) -> str:
-    """
-    QLoRA 訓練函數 - 對應原版 train_tinyllm.py
-    """
-    print_step(2, "QLoRA 訓練")
+def train_tinyllm(data_path: str, output_dir: str, num_epochs: int = 3) -> str:
+    """QLoRA training - exact same as original"""
+    print_step(2, "QLoRA Training")
     
     from transformers import (
         AutoModelForCausalLM,
@@ -508,17 +495,16 @@ def train_tinyllm(
         DataCollatorForLanguageModeling
     )
     from peft import LoraConfig, get_peft_model, TaskType
-    from torch.utils.data import DataLoader
     
-    safe_print(f"   數據: {data_path}")
-    safe_print(f"   輸出: {output_dir}")
+    safe_print(f"   Data: {data_path}")
+    safe_print(f"   Output: {output_dir}")
     safe_print(f"   Epochs: {num_epochs}")
     
-    # 載入數據
+    # Load data
     samples = load_training_data(data_path)
     formatted_data = [format_sample(s) for s in samples]
     
-    # 載入 tokenizer
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         CONFIG['base_model'],
         trust_remote_code=True,
@@ -527,15 +513,15 @@ def train_tinyllm(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # 創建數據集
+    # Create dataset
     dataset = TinyLLMDataset(
         formatted_data,
         tokenizer,
         CONFIG["max_seq_length"]
     )
     
-    # 載入模型
-    safe_print("\n🔄 載入基礎模型...")
+    # Load model
+    safe_print("\n[LOADING] Loading base model...")
     model = AutoModelForCausalLM.from_pretrained(
         CONFIG['base_model'],
         torch_dtype=torch.float16,
@@ -543,7 +529,7 @@ def train_tinyllm(
         trust_remote_code=True,
     )
     
-    # QLoRA 配置 (完全對應原版)
+    # QLoRA config (exact same as original)
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         inference_mode=False,
@@ -556,7 +542,7 @@ def train_tinyllm(
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
     
-    # 訓練參數 (完全對應原版)
+    # Training arguments (exact same as original)
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
@@ -588,33 +574,31 @@ def train_tinyllm(
         data_collator=data_collator,
     )
     
-    # 訓練
-    safe_print("\n🔥 開始訓練...")
+    # Train
+    safe_print("\n[TRAINING] Starting training...")
     trainer.train()
     
-    # 保存
+    # Save
     os.makedirs(output_dir, exist_ok=True)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
     
-    safe_print(f"\n✅ 模型已保存: {output_dir}")
+    safe_print(f"\n[OK] Model saved: {output_dir}")
     
     return output_dir
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PART 3: Test TinyLLM (測試)
+# PART 3: Testing
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_tinyllm(model_path: str):
-    """
-    測試函數 - 對應原版 test_tinyllm.py
-    """
-    print_step(3, "測試模型")
+    """Test function - exact same as original"""
+    print_step(3, "Testing Model")
     
     from transformers import AutoModelForCausalLM, AutoTokenizer
     import torch
     
-    # 測試場景 (完全對應原版)
+    # Test scenarios (exact same as original)
     test_scenarios = [
         {
             "name": "SQL Injection",
@@ -638,11 +622,11 @@ def test_tinyllm(model_path: str):
         },
     ]
     
-    # 載入模型
-    safe_print(f"\n📦 載入模型: {model_path}")
+    # Load model
+    safe_print(f"\n[LOADING] Model: {model_path}")
     
     if not os.path.exists(model_path):
-        safe_print(f"❌ 模型不存在: {model_path}")
+        safe_print(f"[ERROR] Model not found: {model_path}")
         return
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -654,16 +638,16 @@ def test_tinyllm(model_path: str):
     )
     model.eval()
     
-    safe_print("✅ 模型載入成功\n")
+    safe_print("[OK] Model loaded\n")
     
-    # 測試每個場景
+    # Test each scenario
     for i, test in enumerate(test_scenarios, 1):
-        safe_print(f"\n{'='*60}")
+        safe_print(f"{'='*60}")
         safe_print(f"  Test {i}: {test['name']}")
         safe_print(f"{'='*60}")
-        safe_print(f"\n👤 Scenario: {test['scenario']}")
+        safe_print(f"\n[INPUT] {test['scenario']}")
         
-        # 構造 prompt (完全對應原版)
+        # Build prompt (exact same as original)
         prompt = f"""You are a professional penetration tester.
 
 Scenario: {test['scenario']}
@@ -690,72 +674,72 @@ Provide the complete attack chain with executable commands. Include:
         
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # 提取 assistant 回應
+        # Extract assistant response
         assistant_response = response.split("assistant")[-1].strip()
         
-        safe_print(f"\n🤖 Response:\n{assistant_response[:800]}")
+        safe_print(f"\n[OUTPUT]:\n{assistant_response[:800]}")
         
         clean_gpu_memory()
     
     safe_print(f"\n{'='*60}")
-    safe_print("  ✅ 測試完成")
+    safe_print("  [OK] Testing complete")
     safe_print(f"{'='*60}")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PART 4: Complete Pipeline (完整流程)
+# PART 4: Complete Pipeline
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_pipeline():
-    """運行完整流程"""
+    """Run complete pipeline"""
     print("\n" + "="*60)
-    safe_print("  🔐 Cybersecurity 4B Model - Colab 完整訓練流程")
+    safe_print("  Cybersecurity 4B Model - Colab Training Pipeline")
     safe_print("="*60)
     
-    # Step 0: 檢查 GPU
-    print_step(0, "檢查 GPU")
+    # Step 0: Check GPU
+    print_step(0, "Check GPU")
     has_gpu = check_gpu()
     if not has_gpu:
-        safe_print("⚠️ 警告: 未檢測到 GPU，訓練會非常慢!")
+        safe_print("[WARNING] No GPU - training will be very slow!")
     
-    # Step 1: 安裝依賴
+    # Step 1: Install dependencies
     install_dependencies()
     
-    # Step 2: 生成數據
+    # Step 2: Generate data
     data_file = generate_distilled_data(
         CONFIG["data_path"],
         CONFIG["max_samples"]
     )
     
-    # Step 3: 訓練
+    # Step 3: Train
     output_dir = train_tinyllm(
         data_file,
         CONFIG["output_dir"],
         CONFIG["num_train_epochs"],
     )
     
-    # Step 4: 測試
+    # Step 4: Test
     test_tinyllm(output_dir)
     
-    # 完成
+    # Complete
     print("\n" + "="*60)
-    safe_print("  🎉 訓練流程完成!")
+    safe_print("  [OK] Training Complete!")
     safe_print("="*60)
-    safe_print(f"\n📁 模型位置: {output_dir}")
-    safe_print("\n下一步:")
-    safe_print("1. 下載模型文件")
-    safe_print("2. 使用 transformers 載入推理")
-    safe_print("3. 添加 RAG 模塊獲取最新 CVE")
+    safe_print(f"\nModel: {output_dir}")
+    safe_print("\nNext steps:")
+    safe_print("1. Download model files")
+    safe_print("2. Load with transformers for inference")
+    safe_print("3. Add RAG for latest CVE data")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 主函數
+# Main Function
 # ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     try:
         run_pipeline()
     except KeyboardInterrupt:
-        safe_print("\n⚠️ 用戶中斷")
+        safe_print("\n[WARNING] User interrupted")
     except Exception as e:
-        safe_print(f"\n❌ 錯誤: {e}")
+        safe_print(f"\n[ERROR] {e}")
         import traceback
         traceback.print_exc()
