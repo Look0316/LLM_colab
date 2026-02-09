@@ -37,12 +37,12 @@ def safe_print(msg):
 # ═══════════════════════════════════════════════════════════════════════════
 
 CONFIG = {
-    # Model config
-    "qwen_model": "Qwen/Qwen2.5-7B-Instruct",
-    "base_model": "Qwen/Qwen2.5-7B-Instruct",
+    # Model config - 使用更小的模型以適配 T4 GPU
+    "qwen_model": "Qwen/Qwen2.5-3B-Instruct",
+    "base_model": "Qwen/Qwen2.5-3B-Instruct",
     
-    # Data config
-    "max_samples": 2000,
+    # Data config - 減少樣本數加速測試
+    "max_samples": 500,
     "data_path": "/content/data/distilled_tinyllm.jsonl",
     "output_dir": "/content/outputs/finetuned_tinyllm_v1",
     
